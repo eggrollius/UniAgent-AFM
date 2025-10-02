@@ -23,6 +23,7 @@ The MHQA agent follows a structured 6-step pipeline:
 - **542,682 training examples** generated
 - **238MB training dataset** created
 - **Real retrieval service** with 180,894 HotpotQA documents
+- **LLM-powered reasoning** with GPT-4o-mini integration
 - **Production-ready** error handling and fallback mechanisms
 
 ## Quick Start
@@ -33,16 +34,28 @@ The MHQA agent follows a structured 6-step pipeline:
 # Install dependencies
 pip install uv
 uv sync
+
+# Install OpenAI for LLM reasoning (optional)
+pip install openai
+
+# Set up API key (optional)
+export OPENAI_API_KEY="your-openai-api-key"
 ```
 
 ### Basic Usage
 
 ```bash
-# Test with a single question
-python -m agent_systems.MHQA_agent.main --question "What is the capital of France?" --topk_sparse 5 --topk_dense 5 -o test_output.json
+# Test with LLM reasoning (default)
+python -m agent_systems.MHQA_agent.main --question "What is the capital of France?" --use_llm -o test_llm.json
 
-# Process full HotpotQA dataset
-python run_full_mhqa_agent.py
+# Test with heuristic reader only
+python -m agent_systems.MHQA_agent.main --question "What is the capital of France?" --no_llm -o test_heuristic.json
+
+# Process full HotpotQA dataset with LLM
+python run_full_mhqa_agent.py --use_llm
+
+# Process full dataset with heuristic only
+python run_full_mhqa_agent.py --no_llm
 ```
 
 ### Production Retrieval Service
@@ -59,8 +72,8 @@ curl "http://localhost:8001/search?q=test&k=1"
 export BM25_API_URL="http://localhost:8001/search"
 export DENSE_API_URL="http://localhost:8001/search"
 
-# Test with real retrieval
-python -m agent_systems.MHQA_agent.main --question "What is the capital of France?" --topk_sparse 5 --topk_dense 5 -o test_output_real.json
+# Test with real retrieval and LLM reasoning
+python -m agent_systems.MHQA_agent.main --question "What is the capital of France?" --use_llm -o test_output_real.json
 ```
 
 ## Project Structure
@@ -165,6 +178,26 @@ The `trajectory_to_dataset.py` script converts trajectories to training format:
 - **Modular architecture** for easy extension
 - **Robust service architecture** with HTTP API
 
+## LLM Integration Features
+
+### **Intelligent Reasoning**
+- **Multi-hop analysis** - Connects information across multiple documents
+- **Step-by-step reasoning** - Transparent thought process for each answer
+- **Context understanding** - Analyzes retrieved documents intelligently
+- **Answer quality** - Significantly improved over heuristic approach
+
+### **Flexible Configuration**
+- **Optional LLM** - Can be enabled/disabled per run
+- **Command-line control** - `--use_llm` and `--no_llm` flags
+- **Environment-based** - Works with or without API key
+- **Graceful degradation** - Falls back to heuristic when needed
+
+### **Production Ready**
+- **Error handling** - Robust fallback mechanisms
+- **API integration** - OpenAI GPT-4o-mini support
+- **Cost control** - Optional feature for budget management
+- **Performance** - Optimized for production use
+
 ## Performance
 
 - **Processing speed**: ~100 questions per minute
@@ -173,13 +206,17 @@ The `trajectory_to_dataset.py` script converts trajectories to training format:
 - **Scalability**: Handles full HotpotQA dataset
 - **Service reliability**: HTTP API with proper error handling
 
+
+
 ## Example Output
 
+### LLM Reasoning Output
 ```json
 {
   "run_id": "uuid",
   "domain": "mhqa",
   "task_id": "What is the capital of France?",
+  "model_name": "gpt-4o-mini",
   "success": true,
   "steps": [
     {
@@ -187,7 +224,34 @@ The `trajectory_to_dataset.py` script converts trajectories to training format:
       "content": "PLAN: retrieve evidence via sparse and dense, merge, then read to answer: 'What is the capital of France?'.",
       "phase": "PLAN"
     },
-    // ... 5 more steps with real retrieval results
+    {
+      "role": "tool",
+      "content": "<returncode>0</returncode><output>{\"answer\": \"Paris\", \"reasoning\": \"1. The question asks for the capital of France...\"}</output>",
+      "phase": "READ"
+    }
+  ]
+}
+```
+
+### Heuristic Reader Output
+```json
+{
+  "run_id": "uuid",
+  "domain": "mhqa",
+  "task_id": "What is the capital of France?",
+  "model_name": "heuristic",
+  "success": true,
+  "steps": [
+    {
+      "role": "assistant",
+      "content": "PLAN: retrieve evidence via sparse and dense, merge, then read to answer: 'What is the capital of France?'.",
+      "phase": "PLAN"
+    },
+    {
+      "role": "tool",
+      "content": "<returncode>0</returncode><output>{\"answer\": \"France is a country in Europe.\"}</output>",
+      "phase": "READ"
+    }
   ]
 }
 ```
