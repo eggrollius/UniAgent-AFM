@@ -81,7 +81,11 @@ def run_episode(question: str, topk_sparse: int, topk_dense: int, out_path: str,
     run["success"] = (r_read.returncode == 0)
     run["stop_reason"] = "solved" if run["success"] else "error"
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # Create directory if needed (only if out_path has a directory component)
+    dir_path = os.path.dirname(out_path)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+    
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(run, f, ensure_ascii=False, indent=2)
     print(f"[ok] saved trajectory to {out_path}")
@@ -100,4 +104,9 @@ if __name__ == "__main__":
     use_llm = args.use_llm and not args.no_llm
     
     out_path = args.out or f"data/raw/{uuid.uuid4()}.traj.json"
+    
+    # Create data directory if using default path
+    if not args.out:
+        os.makedirs("data/raw", exist_ok=True)
+    
     run_episode(args.question, args.topk_sparse, args.topk_dense, out_path, use_llm)
