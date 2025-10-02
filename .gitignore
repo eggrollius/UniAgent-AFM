@@ -6,4 +6,14 @@ lm-evaluation-harness
 
 venv
 
-sft/data/**
+sft/data/**.DS_Store
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env/
+
+# Training artifacts
+checkpoints/
+results/
+runs/
