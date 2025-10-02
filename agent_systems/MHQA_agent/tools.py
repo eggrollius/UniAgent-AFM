@@ -2,6 +2,12 @@ from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
 import os, time, json, urllib.parse, urllib.request
 
+# LLM integration
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
+
 @dataclass
 class ToolResult:
     name: str
@@ -118,3 +124,94 @@ class HeuristicReader:
                               latency_ms=int((time.time()-t0)*1000))
         except Exception as e:
             return ToolResult(self.name, {"q": question}, stderr=str(e), returncode=2)
+
+class LLMReader:
+    """
+    LLM-powered reader that uses OpenAI GPT models for intelligent multi-hop reasoning.
+    Falls back to HeuristicReader if OpenAI is not available or API key is missing.
+    """
+    def __init__(self, model: str = "gpt-4o-mini"):
+        self.name = "llm_reader"
+        self.model = model
+        self.client = None
+        self.fallback_reader = HeuristicReader()
+        
+    def _get_client(self):
+        if self.client is None:
+            if OpenAI is None:
+                raise RuntimeError("OpenAI client not available. Install openai>=1.40")
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError("OPENAI_API_KEY not set")
+            self.client = OpenAI(api_key=api_key)
+        return self.client
+
+    def __call__(self, question: str, merged_json: str) -> ToolResult:
+        """Use LLM to reason about the question and context to find the answer"""
+        t0 = time.time()
+        
+        try:
+            # Parse the merged context
+            docs = json.loads(merged_json).get("docs", [])
+            if not docs:
+                return self.fallback_reader(question, merged_json)
+            
+            # Build context from retrieved documents
+            context_parts = []
+            for i, doc in enumerate(docs[:5]):  # Use top 5 docs
+                title = doc.get("title", f"Document {i+1}")
+                text = doc.get("text", "")
+                context_parts.append(f"**{title}**: {text}")
+            
+            context = "\n\n".join(context_parts)
+            
+            # Get LLM client
+            client = self._get_client()
+            
+            # Create a reasoning prompt
+            prompt = f"""You are a multi-hop question answering expert. Given a question and retrieved context, provide a step-by-step reasoning process to find the answer.
+
+Question: {question}
+
+Context:
+{context}
+
+Instructions:
+1. Analyze the question to understand what information is needed
+2. Examine the context to find relevant information
+3. Connect information from multiple sources if needed (multi-hop reasoning)
+4. Provide your reasoning step by step
+5. Give a clear, concise final answer
+
+Format your response as:
+REASONING: [Your step-by-step analysis]
+ANSWER: [The final answer]"""
+
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=500
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            # Extract answer from response
+            if "ANSWER:" in result:
+                answer = result.split("ANSWER:")[-1].strip()
+                reasoning = result.split("ANSWER:")[0].replace("REASONING:", "").strip()
+            else:
+                answer = result
+                reasoning = "No explicit reasoning provided"
+                
+            return ToolResult(
+                self.name,
+                {"question": question, "model": self.model},
+                stdout=json.dumps({"answer": answer, "reasoning": reasoning, "full_response": result}),
+                latency_ms=int((time.time() - t0) * 1000)
+            )
+            
+        except Exception as e:
+            # Fallback to heuristic reader
+            print(f"⚠️ LLM Reader failed: {e}. Falling back to heuristic reader.")
+            return self.fallback_reader(question, merged_json)

@@ -93,6 +93,9 @@ UniAgent-AFM/
 # For real retrieval services
 export BM25_API_URL="http://localhost:8001/search"
 export DENSE_API_URL="http://localhost:8001/search"
+
+# For LLM reasoning (optional)
+export OPENAI_API_KEY="your-openai-api-key"
 ```
 
 ### Parameters
@@ -100,6 +103,8 @@ export DENSE_API_URL="http://localhost:8001/search"
 - `--question`: The multi-hop question to answer
 - `--topk_sparse`: Number of sparse retrieval results (default: 5)
 - `--topk_dense`: Number of dense retrieval results (default: 5)
+- `--use_llm`: Enable LLM reasoning (default: True)
+- `--no_llm`: Disable LLM reasoning, use heuristic reader
 - `-o`: Output file path for trajectory
 
 ## Data Processing
@@ -141,11 +146,19 @@ The `trajectory_to_dataset.py` script converts trajectories to training format:
 - Uses simple heuristics for answer selection
 - Returns structured answer format
 
+### LLMReader
+- **LLM-powered reasoning** with GPT-4o-mini
+- **Multi-hop reasoning** to connect information across sources
+- **Step-by-step analysis** of questions and context
+- **Intelligent answer extraction** using AI reasoning
+- **Graceful fallback** to HeuristicReader if LLM unavailable
+
 ## Production Features
 
 - **Complete 6-step pipeline** implementation
 - **Real retrieval** with 180K HotpotQA documents
-- **Graceful fallback** to stub data when service unavailable
+- **LLM-powered reasoning** with GPT-4o-mini for intelligent answer generation
+- **Graceful fallback** to heuristic reader when LLM unavailable
 - **Large-scale processing** (90K+ questions)
 - **Production-ready** error handling
 - **Training data generation** (542K examples)
