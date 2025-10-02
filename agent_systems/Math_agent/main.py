@@ -1,83 +1,36 @@
-import argparse, json, os, uuid, datetime, re
-from typing import Dict, Any, Optional
-from .tools import AddTool, MultiplyTool, SquareTool, eval_expression, ToolResult
+import os, json, argparse, uuid
+from .agent import solve
+from .afm_schema import AFMTrajectory
 
-def now_iso():
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+def read_jsonl(path: str):
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                yield json.loads(line)
 
-def new_step(turn_id: int, phase: str, thought: str, action_block: Optional[str] = None,
-             observation: Dict[str, Any] = None):
-    content = thought
-    if action_block:
-        content += f"\n\n```bash\n{action_block}\n```"
-    obs_xml = ""
-    if observation:
-        rc = observation.get("returncode"); out = observation.get("stdout","")
-        obs_xml = f"<returncode>{rc}</returncode><output>{out}</output>"
-    return [
-        {"role": "assistant", "content": content, "phase": phase, "turn_id": turn_id},
-        {"role": "tool", "content": obs_xml, "turn_id": turn_id},
-    ]
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", required=True, help="JSONL with {id, question}")
+    ap.add_argument("--out", required=True, help="Output AFM JSONL path")
+    ap.add_argument("--model", default="gpt-4o-mini")
+    ap.add_argument("--max-steps", type=int, default=8)
+    ap.add_argument("--task", default="MathQA")
+    args = ap.parse_args()
 
-def pick_and_run_tool(query: str) -> (str, ToolResult):
-    add = re.match(r"(?i)\s*add\s+([\-0-9\.]+)\s+(and|&)\s+([\-0-9\.]+)", query)
-    mul = re.match(r"(?i)\s*(multiply|times)\s+([\-0-9\.]+)\s+(by|x)\s+([\-0-9\.]+)", query)
-    sqr = re.match(r"(?i)\s*square\s+([\-0-9\.]+)", query)
-    if add:
-        a, b = add.group(1), add.group(3)
-        return "add", AddTool()(a, b)
-    if mul:
-        a, b = mul.group(2), mul.group(4)
-        return "multiply", MultiplyTool()(a, b)
-    if sqr:
-        x = sqr.group(1)
-        return "square", SquareTool()(x)
-    return "eval_expression", eval_expression(query)
-
-def run_episode(task: str, out_path: str):
-    run = {
-        "run_id": str(uuid.uuid4()),
-        "domain": "math",
-        "task_id": task[:64],
-        "env": "local",
-        "model_name": "none (stub)",
-        "start_time": now_iso(),
-        "end_time": None,
-        "success": False,
-        "stop_reason": "unknown",
-        "steps": [],
-    }
-
-    turn = 1
-    run["steps"] += new_step(turn, "PLAN", f"PLAN: decide the math operation for: '{task}'.")
-
-    turn += 1
-    tool_name, res = pick_and_run_tool(task)
-    action_cmd = f"{tool_name}('{task}')"
-    run["steps"] += new_step(
-        turn, "EXEC",
-        f"EXEC: call tool {tool_name} to compute the result.",
-        action_cmd,
-        {"returncode": res.returncode, "stdout": res.stdout},
-    )
-
-    turn += 1
-    run["steps"] += new_step(turn, "FINALIZE", "FINALIZE: return the numeric result.", "echo SUBMIT_FINAL",
-                             {"returncode": 0, "stdout": res.stdout})
-
-    run["end_time"] = now_iso()
-    run["success"] = (res.returncode == 0)
-    run["stop_reason"] = "solved" if run["success"] else "error"
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(run, f, ensure_ascii=False, indent=2)
-    print(f"[ok] saved trajectory to {out_path}")
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    n = 0
+    with open(args.out, "w", encoding="utf-8") as fout:
+        for ex in read_jsonl(args.dataset):
+            qid = ex.get("id") or f"math-{uuid.uuid4().hex[:8]}"
+            steps, final = solve(ex["question"], model=args.model, max_steps=args.max_steps)
+            traj = AFMTrajectory(
+                id=qid, task=args.task, question=ex["question"], context="",
+                steps=steps, answer=str(final),
+                meta={"model": args.model, "max_steps": args.max_steps}
+            )
+            fout.write(traj.to_json() + "\n")
+            n += 1
+    print(f"[OK] Wrote {n} AFM trajectories -> {args.out}")
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--task", required=True, help='e.g., "add 3 and 5", "multiply 2 by 7", "square 9", or "2+3*4"')
-    ap.add_argument("-o", "--out", default=None, help="output raw trajectory path")
-    args = ap.parse_args()
-    out_path = args.out or f"data/raw/{uuid.uuid4()}.traj.json"
-    run_episode(args.task, out_path)
+    main()
