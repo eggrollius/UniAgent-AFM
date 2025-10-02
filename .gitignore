@@ -7,3 +7,4 @@ lm-evaluation-harness
 venv
 
 sft/data/**
+!sft/data/download_trajectories.sh

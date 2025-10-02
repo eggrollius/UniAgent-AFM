@@ -1,5 +1,9 @@
 # How to download the trajecotires for swebench
-Use this repo: `https://github.com/SWE-bench/experiments` to download the swe benc trajectories.
+```
+cd data
+chmod +x download_trajectories.sh
+./download_trajectories.sh
+```
 
 # Convert the trajectory to a sft friendly dataset
 ```
