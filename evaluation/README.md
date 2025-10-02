@@ -12,7 +12,14 @@ python generate_merged_models.py
     --base_model modles/AFM-CodeAgent-7B-sft \
     --alphas -2.0 -1.0 1.0 2.0
 ```
-### Evaluate a Model
+### Evaluate Models
 ```
-lm_eval --model hf --model_args pretrained=merges/alpha1.0,dtype=bfloat16,trust_remote_code=True --tasks humaneval --device cuda:0 --batch_size 1 --gen_kwargs temperature=0.5,max_gen_toks=2048 --log_samples --output_path results.json --confirm_run_unsafe_code
+python evaluate.py models/
 ```
+
+### Export the results .tar
+Run a webserver
+```
+python -m http.server 8000
+```
+Go to your computer/runpods port 8000 over http and download the tar.
