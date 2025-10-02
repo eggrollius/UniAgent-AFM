@@ -5,17 +5,6 @@ PROJECT_DIR=$(pwd)
 
 echo "[*] Setting up AFM-CodeAgent-7B environment"
 
-python -m pip install --upgrade pip wheel setuptools
-pip install "huggingface_hub[cli]>=0.23" accelerate transformers datasets \
-            peft bitsandbytes einops
-
-# clone & install deps
-[[ -d lm-evaluation-harness ]] || git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness
-pip install -e ./lm-evaluation-harness
-
-[[ -d mergekit ]] || git clone https://github.com/arcee-ai/mergekit.git
-pip install -e ./mergekit
-
 # model downloads
 mkdir -p models
 

@@ -1,0 +1,18 @@
+[project]
+name = "bookish-octo-guacamole"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "datasets>=4.1.1",
+    "mergekit",
+    "numpy>=2.3.3",
+    "pyyaml>=6.0.3",
+    "torch>=2.8.0",
+    "transformers>=4.56.2",
+    "trl>=0.23.0",
+]
+
+[tool.uv.sources]
+mergekit = { git = "https://github.com/arcee-ai/mergekit.git", rev = "d4b4b6c08f9e7014c0acf1c4402b9409d778a79e" }
