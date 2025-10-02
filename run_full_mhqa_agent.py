@@ -10,7 +10,7 @@ from datasets import load_dataset
 
 def download_hotpotqa():
     """Download the full HotpotQA dataset"""
-    print("📥 Downloading full HotpotQA dataset...")
+    print("Downloading full HotpotQA dataset...")
     try:
         dataset = load_dataset("hotpot_qa", "distractor")
         print(f"Downloaded: {len(dataset['train'])} training questions")

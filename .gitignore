@@ -9,5 +9,11 @@ venv
 sft/data/**
 !sft/data/download_trajectories.sh
 
-run_full_swe_agent.py
-run_full_math_agent.py
+examples/quick_retrieval_service.py
+
+# Test files and logs
+*.log
+test_output*.json
+demo_output*.json
+__pycache__/
+*.pyc

@@ -37,7 +37,7 @@ def main():
 
     root_path = Path(sys.argv[1])
     if not root_path.is_dir():
-        print(f"❌ {root_path} is not a directory")
+        print(f"{root_path} is not a directory")
         sys.exit(1)
 
     all_rows = []
@@ -47,10 +47,10 @@ def main():
             all_rows.extend(rows)
             print(f"✓ Parsed {traj_file} ({len(rows)} rows)")
         except Exception as e:
-            print(f"⚠️ Skipped {traj_file}: {e}")
+            print(f"Skipped {traj_file}: {e}")
 
     if not all_rows:
-        print("⚠️ No .json files found, nothing written.")
+        print("No .json files found, nothing written.")
         sys.exit(1)
 
     # Write to a single output file
@@ -59,7 +59,7 @@ def main():
         for row in all_rows:
             out_f.write(json.dumps(row) + "\n")
 
-    print(f"✅ Dataset written to: {output_path.resolve()} (total rows: {len(all_rows)})")
+    print(f"Dataset written to: {output_path.resolve()} (total rows: {len(all_rows)})")
 
 if __name__ == "__main__":
     main()
