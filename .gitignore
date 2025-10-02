@@ -8,3 +8,9 @@ venv
 
 sft/data/**
 !sft/data/download_trajectories.sh
+.DS_Store
+.venv/
+runs/
+checkpoints/
+trajectories/
+results/
