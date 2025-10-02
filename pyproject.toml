@@ -9,6 +9,8 @@ dependencies = [
     "bitsandbytes>=0.48.0",
     "datasets>=4.1.1",
     "evaluate>=0.4.6",
+    "hf-transfer>=0.1.9",
+    "huggingface-hub>=0.35.3",
     "lm-eval>=0.4.9",
     "mergekit",
     "numpy>=2.3.3",

@@ -14,7 +14,7 @@ python generate_merged_models.py
 ```
 ### Evaluate Models
 ```
-python evaluate.py models/
+python evaluate.py merges/
 ```
 
 ### Export the results .tar
