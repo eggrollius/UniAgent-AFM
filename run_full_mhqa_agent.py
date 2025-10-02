@@ -13,11 +13,11 @@ def download_hotpotqa():
     print("📥 Downloading full HotpotQA dataset...")
     try:
         dataset = load_dataset("hotpot_qa", "distractor")
-        print(f"✅ Downloaded: {len(dataset['train'])} training questions")
-        print(f"✅ Downloaded: {len(dataset['validation'])} validation questions")
+        print(f"Downloaded: {len(dataset['train'])} training questions")
+        print(f"Downloaded: {len(dataset['validation'])} validation questions")
         return dataset
     except Exception as e:
-        print(f"❌ Error downloading dataset: {e}")
+        print(f"Error downloading dataset: {e}")
         return None
 
 def run_mhqa_agent(question, output_dir, question_id):
@@ -36,7 +36,7 @@ def run_mhqa_agent(question, output_dir, question_id):
         subprocess.run(cmd, check=True, capture_output=True)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error with question {question_id}: {e}")
+        print(f"Error with question {question_id}: {e}")
         return False
 
 def main():
@@ -44,7 +44,7 @@ def main():
     output_dir = Path("data/raw/full_mhqa_trajectories")
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print("🚀 Running MHQA Agent on FULL HotpotQA Dataset")
+    print("Running MHQA Agent on FULL HotpotQA Dataset")
     print("=" * 60)
     
     # Download dataset
@@ -54,7 +54,7 @@ def main():
     
     # Process training set
     train_data = dataset['train']
-    print(f"\n📊 Processing {len(train_data)} training questions...")
+    print(f"\nProcessing {len(train_data)} training questions...")
     
     success_count = 0
     for i, item in enumerate(train_data):
@@ -66,20 +66,20 @@ def main():
         if run_mhqa_agent(question, output_dir, i):
             success_count += 1
     
-    print(f"\n🎉 MHQA Agent completed!")
-    print(f"📊 Generated {success_count}/{len(train_data)} trajectories")
-    print(f"📁 Saved in: {output_dir}")
+    print(f"\nMHQA Agent completed!")
+    print(f"Generated {success_count}/{len(train_data)} trajectories")
+    print(f"Saved in: {output_dir}")
     
     # Convert to training dataset
-    print("\n🔄 Converting to training dataset...")
+    print("\nConverting to training dataset...")
     try:
         subprocess.run([
             "python3", "sft/trajectory_to_dataset.py", 
             str(output_dir)
         ], check=True)
-        print("✅ Training dataset created!")
+        print("Training dataset created!")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error converting: {e}")
+        print(f"Error converting: {e}")
 
 if __name__ == "__main__":
     main()
