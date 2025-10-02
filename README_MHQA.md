@@ -64,22 +64,25 @@ python -m agent_systems.MHQA_agent.main --question "What is the capital of Franc
 ```
 
 ## Project Structure
+```
 UniAgent-AFM/
 ├── README.md
+├── README_MHQA.md        
 ├── pyproject.toml
 ├── agent_systems/
-│ └── MHQA_agent/
-│ ├── main.py # Main agent logic
-│ └── tools.py # Tool implementations
-├── run_full_mhqa_agent.py # Full dataset processing
+│   └── MHQA_agent/
+│       ├── main.py          # Main agent logic
+│       └── tools.py         # Tool implementations
+├── run_full_mhqa_agent.py   # Full dataset processing
 ├── sft/
-│ ├── trajectory_to_dataset.py # Data conversion
-│ └── sft.py # SFT training script
+│   ├── trajectory_to_dataset.py  # Data conversion
+│   └── sft.py               # SFT training script
 ├── examples/
-│ └── retrieval_service.py # Real HotpotQA retrieval service
+│   └── retrieval_service.py # Real HotpotQA retrieval service
 ├── scripts/
-│ └── mhqa_trajectory_to_dataset.py # MHQA-specific conversion
-└── data/raw/full_mhqa_trajectories/ # Generated trajectories
+│   └── mhqa_trajectory_to_dataset.py  # MHQA-specific conversion
+└── data/raw/full_mhqa_trajectories/  # Generated trajectories
+```
 
 
 ## Configuration
