@@ -1,4 +1,6 @@
+# agent_systems/Math_agent/main.py
 import os, json, argparse, uuid
+from typing import Dict, Any
 from .agent import solve
 from .afm_schema import AFMTrajectory
 
@@ -18,19 +20,25 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    n = 0
+
     with open(args.out, "w", encoding="utf-8") as fout:
         for ex in read_jsonl(args.dataset):
             qid = ex.get("id") or f"math-{uuid.uuid4().hex[:8]}"
-            steps, final = solve(ex["question"], model=args.model, max_steps=args.max_steps)
+            q = ex["question"]
+            steps, final = solve(q, model=args.model, max_steps=args.max_steps)
+
             traj = AFMTrajectory(
-                id=qid, task=args.task, question=ex["question"], context="",
-                steps=steps, answer=str(final),
-                meta={"model": args.model, "max_steps": args.max_steps}
+                id=qid,
+                task=args.task,
+                question=q,
+                context="",
+                steps=steps,
+                answer=str(final),
+                meta={"model": args.model, "max_steps": args.max_steps, "afm_version": "0.1"}
             )
             fout.write(traj.to_json() + "\n")
-            n += 1
-    print(f"[OK] Wrote {n} AFM trajectories -> {args.out}")
+
+    print(f"[OK] wrote AFM trajectories -> {args.out}")
 
 if __name__ == "__main__":
     main()

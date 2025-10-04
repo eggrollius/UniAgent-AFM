@@ -1,167 +1,182 @@
-# agent_systems/Math_agent/agent.py
-
 from __future__ import annotations
 import os, re, json
-from typing import List, Dict, Any, Optional, Tuple
-
+from typing import List, Dict, Any, Tuple, Optional
 from .tools import run_tool
 from .afm_schema import AFMStep
+from openai import OpenAI  # pip install openai>=1.40
 
-MOCK_MODE = os.getenv("MOCK_AGENT", "0") == "1"
-
-VALID: set[str] = {"add", "multiply", "square", "stop"}
-ALIASES: Dict[str, str] = {
-    "addition":"add","plus":"add","sum":"add",
-    "mul":"multiply","times":"multiply","product":"multiply",
-    "sqr":"square","pow2":"square",
-    "stop":"stop","finalize":"stop","finish":"stop","done":"stop",
-    "none":"stop","no-op":"stop","noop":"stop"
+# ---------- Strict config ----------
+VALID: set[str] = {
+    "add", "subtract", "multiply", "divide", "square", "power", "sqrt", "stop"
 }
 
 SYS_PROMPT = (
     "You are a careful math planner.\n"
-    "At each step, choose ONE action from this exact set:\n"
-    "  add(a,b) | multiply(a,b) | square(x) | stop()\n"
-    "Arguments MUST be numeric literals or previously defined variables from the question "
-    "(e.g., if the question says x=4 then you may use x).\n"
-    "Return STRICT JSON ONLY (no prose):\n"
-    '{"thought":"<short>","action":{"name":"add|multiply|square|stop","args":{...}}}\n'
-    "If the task is complete, use name='stop' (args can be {})."
+    "At each step, you must choose ONE action from this exact set:\n"
+    "  add(a,b) | subtract(a,b) | multiply(a,b) | divide(a,b) | square(x) | power(a,b) | sqrt(x) | stop()\n"
+    "Arguments MUST be numeric literals or variables explicitly defined in the QUESTION (e.g., x=4),\n"
+    "or the carry variable r which always refers to the MOST RECENT Observation value.\n"
+    "You MUST NOT invent new variable names. Only use variables from the question or r.\n"
+    "If the question uses words like 'X apples' or 'Y dollars' without assigning them numeric values,\n"
+    "treat them as ordinary text, NOT as variables. Do not attempt to use them in tool calls.\n"
+    "Return STRICT JSON ONLY (no prose, no markdown), exactly this schema:\n"
+    '{"thought":"<short>","action":{"name":"add|subtract|multiply|divide|square|power|sqrt|stop","args":{...}}}\n'
+    "If the task is complete, use name='stop' and args={}. "
+    "Do NOT return anything except the JSON object. NEVER divide by zero. "
+    "For negative bases, only use power(a,b) with integer b."
 )
 
-def extract_json_block(text: str) -> Optional[str]:
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{": depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-    return None
-
-def normalize_action_name(name: str) -> str:
-    n = (name or "").strip().lower()
-    return ALIASES.get(n, n)
-
-# --- NEW: parse variable assignments like "x=4", "y = -3.5"
+# ---------- Utilities ----------
 ASSIGN_RE = re.compile(r"\b([a-zA-Z])\s*=\s*(-?\d+(?:\.\d+)?)\b")
+
 def extract_env_vars(question: str) -> Dict[str, float]:
     env: Dict[str, float] = {}
     for var, val in ASSIGN_RE.findall(question):
-        try:
-            env[var] = float(val)
-        except Exception:
-            pass
+        env[var] = float(val)
     return env
 
-def resolve_arg(val: Any, env: Dict[str, float]) -> float:
+def resolve_arg(val: Any, env: Dict[str, float], last_value: Optional[float]) -> float:
     if isinstance(val, (int, float)):
         return float(val)
     if isinstance(val, str):
         s = val.strip()
+        # special carry variable
+        if s == "r":
+            if last_value is None:
+                raise ValueError("r is not available before the first step")
+            return float(last_value)
         # numeric string?
         try:
             return float(s)
         except Exception:
             pass
-        # variable reference?
+        # variable reference from question
         if s in env:
             return float(env[s])
-    raise ValueError(f"Unresolvable arg: {val}")
+    raise ValueError(f"Unresolvable arg: {val!r}")
 
-# ---- LLM adapter (OpenAI) ----
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None  # type: ignore
+def require_args_for_action(name: str, args: Dict[str, Any]) -> None:
+    if name in {"add", "subtract", "multiply", "divide", "power"}:
+        if not {"a", "b"} <= set(args.keys()):
+            raise ValueError(f"{name} requires args {{a,b}}; got {list(args.keys())}")
+    elif name in {"square", "sqrt"}:
+        if "x" not in args:
+            raise ValueError(f"{name} requires arg {{x}}")
+    elif name == "stop":
+        pass
 
-_client = None
-def _get_client():
+# ---------- OpenAI adapter (strict) ----------
+_client: Optional[OpenAI] = None
+def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        if OpenAI is None:
-            raise RuntimeError("OpenAI client not available. Install openai>=1.40 or replace the adapter.")
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key and not MOCK_MODE:
-            raise RuntimeError("OPENAI_API_KEY not set. Export it or enable MOCK_AGENT=1.")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY not set.")
         _client = OpenAI(api_key=api_key)
     return _client
 
-def llm_plan_step(history: List[Dict[str,str]], model: str) -> Dict[str, Any]:
-    if MOCK_MODE:
-        return {"thought":"Add 3 and 5", "action":{"name":"add","args":{"a":3,"b":5}}}
+def llm_plan_step(history: List[Dict[str, str]], model: str) -> Dict[str, Any]:
     client = _get_client()
-    msgs = [{"role":"system","content":SYS_PROMPT}] + history
-    r = client.chat.completions.create(model=model, messages=msgs, temperature=0)
-    txt = (r.choices[0].message.content or "").strip()
-    block = extract_json_block(txt)
-    if not block:
-        return {"thought":"fallback add","action":{"name":"add","args":{"a":0,"b":0}}}
-    try:
-        return json.loads(block)
-    except Exception:
-        return {"thought":"parse error -> fallback add","action":{"name":"add","args":{"a":0,"b":0}}}
+    msgs = [{"role": "system", "content": SYS_PROMPT}] + history
 
+    schema = {
+        "name": "PlannerStep",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["thought", "action"],
+            "properties": {
+                "thought": {"type": "string"},
+                "action": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["name", "args"],
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "enum": ["add", "subtract", "multiply", "divide", "square", "power", "sqrt", "stop"]
+                        },
+                        "args": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "a": {"type": ["number", "string"]},
+                                "b": {"type": ["number", "string"]},
+                                "x": {"type": ["number", "string"]}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=msgs,
+        temperature=0,
+        response_format={"type": "json_schema", "json_schema": schema},
+    )
+    txt = (resp.choices[0].message.content or "").strip()
+    plan = json.loads(txt)
+
+    # strict checks
+    if not isinstance(plan, dict):
+        raise ValueError("Planner output must be a JSON object.")
+    if "thought" not in plan or "action" not in plan:
+        raise ValueError("Planner output must contain 'thought' and 'action'.")
+    action = plan["action"]
+    if not isinstance(action, dict) or "name" not in action or "args" not in action:
+        raise ValueError("Planner 'action' must have 'name' and 'args'.")
+    name = str(action["name"]).strip().lower()
+    if name not in VALID:
+        raise ValueError(f"Unsupported action name: {name}")
+    if not isinstance(action["args"], dict):
+        raise ValueError("Planner 'args' must be an object.")
+    return plan
+
+# ---------- Public solve ----------
 def solve(question: str, model: str = "gpt-4o-mini", max_steps: int = 8) -> Tuple[List[AFMStep], str]:
-    if MOCK_MODE:
-        steps = [
-            AFMStep(function="add", thought="Add 3 and 5", tool_call={"name":"add","args":{"a":3,"b":5}}, tool_result=8.0),
-            AFMStep(function="multiply", thought="Multiply by 2", tool_call={"name":"multiply","args":{"a":8,"b":2}}, tool_result=16.0),
-        ]
-        return steps, "16"
-
     steps: List[AFMStep] = []
-    env = extract_env_vars(question)   # NEW: seed variable bindings from question
-    history: List[Dict[str,str]] = [{"role":"user","content":f"Question: {question}"}]
+    env = extract_env_vars(question)
+    history: List[Dict[str, str]] = [{"role": "user", "content": f"Question: {question}"}]
     last_value: Any = None
 
     for _ in range(max_steps):
         plan = llm_plan_step(history, model=model)
-        thought = plan.get("thought","")
-        action = plan.get("action",{}) or {}
-        raw_name = action.get("name","add")
-        raw_args = action.get("args",{}) or {}
+        thought = plan["thought"]
+        action = plan["action"]
+        name = str(action["name"]).strip().lower()
+        raw_args = action["args"]
 
-        name = normalize_action_name(str(raw_name))
+        require_args_for_action(name, raw_args)
+
         if name == "stop":
-            steps.append(AFMStep(function="stop", thought=thought or "Stopping.", tool_call={"name":"stop","args":{}}, tool_result=None))
+            steps.append(AFMStep(function="stop", thought=thought,
+                                 tool_call={"name": "stop", "args": {}}, tool_result=None))
             break
 
-        if name not in VALID:
-            steps.append(AFMStep(function="plan",
-                                 thought=f"Unsupported action '{raw_name}', normalized '{name}'. Skipping.",
-                                 tool_call={"name":str(raw_name),"args":raw_args},
-                                 tool_result=None))
-            history.append({"role":"assistant","content":json.dumps(plan)})
-            history.append({"role":"system","content":f"Observation: unsupported action '{name}'."})
-            continue
-
-        # NEW: resolve/validate numeric args using env
+        # resolve args strictly
         try:
-            args: Dict[str, float] = {k: resolve_arg(v, env) for k, v in raw_args.items()}
-        except Exception as e:
-            steps.append(AFMStep(function="plan",
-                                 thought=f"Bad arguments for '{name}': {e}. Skipping.",
-                                 tool_call={"name":name,"args":raw_args},
-                                 tool_result=None))
-            history.append({"role":"assistant","content":json.dumps(plan)})
-            history.append({"role":"system","content":f"Observation: invalid args for {name}: {e}."})
+            args: Dict[str, float] = {k: resolve_arg(v, env, last_value) for k, v in raw_args.items()}
+        except ValueError as err:
+            # Feed the error back to the planner so it can correct course.
+            history.append({"role": "assistant", "content": json.dumps(plan)})
+            history.append({"role": "system", "content": f"Error: {err}. Use only numeric literals, question-defined variables, or r."})
             continue
 
         call, result = run_tool(name, **args)
         steps.append(AFMStep(function=name, thought=thought, tool_call=call, tool_result=result))
 
-        # Feedback loop
-        history.append({"role":"assistant","content":json.dumps(plan)})
-        history.append({"role":"system","content":f"Observation: {result}."})
-        last_value = result
+        # feedback
+        history.append({"role": "assistant", "content": json.dumps(plan)})
+        history.append({"role": "system", "content": f"Observation: {result}."})
+        last_value = result  # <-- keep result in sync
 
-    # Finalize answer
+    # final numeric answer
     client = _get_client()
-    history.append({"role":"user","content":"Given the observations, return only the final numeric answer."})
+    history.append({"role": "user", "content": "Given the observations, return only the final numeric answer."})
     r = client.chat.completions.create(model=model, messages=history, temperature=0)
     final_answer = (r.choices[0].message.content or "").strip()
     return steps, final_answer
