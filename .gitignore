@@ -1,25 +1,24 @@
+# model + merge outputs
 models
 merges
-
 mergekit
 lm-evaluation-harness
 
-venv
-
-sft/data/**
-!sft/data/download_trajectories.sh
-.DS_Store
+# environments
 .venv/
+venv/
+
+# OS junk
+.DS_Store
+
+# project outputs
 runs/
 checkpoints/
 trajectories/
 results/
-__pycache__/
-__pycache__/
 data/
 __pycache__/
-data/
-trajectories/
-__pycache__/
-data/
-trajectories/
+
+# SFT data (ignore everything except the helper script)
+sft/data/**
+!sft/data/download_trajectories.sh
