@@ -20,3 +20,6 @@ data/
 __pycache__/
 data/
 trajectories/
+__pycache__/
+data/
+trajectories/
