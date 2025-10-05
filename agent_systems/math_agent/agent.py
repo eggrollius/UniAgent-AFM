@@ -1,27 +1,68 @@
 from __future__ import annotations
-import os, re, json
-from typing import List, Dict, Any, Tuple, Optional
-from openai import OpenAI  # openai>=1.40
+import os
+import re
+import json
+from typing import Any, Dict, List, Tuple, Optional
+
+from openai import OpenAI  # >=1.40
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from ..afm_schema import AFMStep
 from .tools import run_tool
-from .afm_schema import AFMStep
 
-# ---------- Config ----------
-VALID: set[str] = {
-    "add", "subtract", "multiply", "divide", "square", "power", "sqrt", "stop"
+# ---------- Valid tools & docs ----------
+VALID = {
+    "add", "subtract", "multiply", "divide", "square", "power", "sqrt", "round", "stop"
 }
-TOOLS_DOC = "add(a,b) | subtract(a,b) | multiply(a,b) | divide(a,b) | square(x) | power(a,b) | sqrt(x) | stop()"
-FINAL_TAG = "final"  # used for <final>…</final>
-ASSIGN_RE = re.compile(r"\b([a-zA-Z])\s*=\s*(-?\d+(?:\.\d+)?)\b")
-FINAL_RE = re.compile(rf"<{FINAL_TAG}>\s*([-+]?\d+(?:\.\d+)?)\s*</{FINAL_TAG}>")
+
+TOOLS_DOC = """\
+add(a: number, b: number) -> number
+subtract(a: number, b: number) -> number
+multiply(a: number, b: number) -> number
+divide(a: number, b: number) -> number
+square(x: number) -> number
+power(x: number, y: number) -> number
+sqrt(x: number) -> number
+stop() -> null
+"""
+
+# ---------- Final tag handling ----------
+FINAL_TAG = "final"
+FINAL_RE = re.compile(r"<\s*final\s*>(.*?)</\s*final\s*>", re.I | re.S)
+
+def extract_final_answer(text: str) -> str:
+    """
+    Tolerant extractor: handles case/whitespace and accidental code fences.
+    Raises ValueError if the <final>...</final> tag is missing.
+    """
+    if not text:
+        raise ValueError(f"Final answer missing or not wrapped in <{FINAL_TAG}> tags.")
+    t = text.strip()
+    # Strip accidental code fences if any
+    if t.startswith("```"):
+        # remove leading and trailing backticks/newlines/spaces
+        t = t.strip("` \n\r\t")
+    m = FINAL_RE.search(t)
+    if not m:
+        raise ValueError(f"Final answer missing or not wrapped in <{FINAL_TAG}> tags.")
+    return m.group(1).strip()
+
+# ---------- OpenAI client (lazy) ----------
+_client_singleton: Optional[OpenAI] = None
+def _client() -> OpenAI:
+    global _client_singleton
+    if _client_singleton is None:
+        key = os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError("OPENAI_API_KEY not set")
+        _client_singleton = OpenAI(api_key=key)
+    return _client_singleton
 
 # ---------- Prompt loading via Jinja ----------
 def _render_system_prompt() -> str:
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    tmpl_dir = os.path.join(repo_root, "prompts")
+    prompts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "prompts"))
     env = Environment(
-        loader=FileSystemLoader(tmpl_dir),
+        loader=FileSystemLoader(prompts_dir),
         autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
         trim_blocks=True,
         lstrip_blocks=True,
@@ -32,57 +73,16 @@ def _render_system_prompt() -> str:
         tool_names=sorted(list(VALID)),
     )
 
-# ---------- Utilities ----------
-def extract_env_vars(question: str) -> Dict[str, float]:
-    env: Dict[str, float] = {}
-    for var, val in ASSIGN_RE.findall(question):
-        env[var] = float(val)
-    return env
-
-def resolve_arg(val: Any, env: Dict[str, float], last_value: Optional[float]) -> float:
-    if isinstance(val, (int, float)):
-        return float(val)
-    if isinstance(val, str):
-        s = val.strip()
-        if s == "r":
-            if last_value is None:
-                raise ValueError("r is not available before the first step")
-            return float(last_value)
-        try:
-            return float(s)
-        except Exception:
-            pass
-        if s in env:
-            return float(env[s])
-    raise ValueError(f"Unresolvable arg: {val!r}")
-
-def require_args_for_action(name: str, args: Dict[str, Any]) -> None:
-    if name in {"add", "subtract", "multiply", "divide", "power"}:
-        if not {"a", "b"} <= set(args.keys()):
-            raise ValueError(f"{name} requires args {{a,b}}; got {list(args.keys())}")
-    elif name in {"square", "sqrt"}:
-        if "x" not in args:
-            raise ValueError(f"{name} requires arg {{x}}")
-    elif name == "stop":
-        pass
-
-# ---------- OpenAI client ----------
-_client: Optional[OpenAI] = None
-def _get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY not set.")
-        _client = OpenAI(api_key=api_key)
-    return _client
-
-# ---------- Planner step (schema-enforced) ----------
-def llm_plan_step(history: List[Dict[str, str]], model: str) -> Dict[str, Any]:
-    client = _get_client()
-    msgs = history  # system prompt is inserted by caller
-
-    schema = {
+# ---------- JSON-schema for planning ----------
+def _planner_schema() -> Dict[str, Any]:
+    """
+    Enforce that each step is:
+      {
+        "thought": str,
+        "action": {"name": one_of(VALID), "args": object}
+      }
+    """
+    return {
         "name": "PlannerStep",
         "schema": {
             "type": "object",
@@ -95,95 +95,160 @@ def llm_plan_step(history: List[Dict[str, str]], model: str) -> Dict[str, Any]:
                     "additionalProperties": False,
                     "required": ["name", "args"],
                     "properties": {
-                        "name": {
-                            "type": "string",
-                            "enum": sorted(list(VALID))
-                        },
-                        "args": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "a": {"type": ["number", "string"]},
-                                "b": {"type": ["number", "string"]},
-                                "x": {"type": ["number", "string"]}
-                            }
-                        }
+                        "name": {"type": "string", "enum": sorted(list(VALID))},
+                        "args": {"type": "object"}  # validated by tool when run
                     }
                 }
             }
         }
     }
 
-    resp = client.chat.completions.create(
+def _plan_step(history: List[Dict[str, str]], model: str) -> Dict[str, Any]:
+    r = _client().chat.completions.create(
         model=model,
-        messages=msgs,
         temperature=0,
-        response_format={"type": "json_schema", "json_schema": schema},
+        messages=history,
+        response_format={"type": "json_schema", "json_schema": _planner_schema()},
     )
-    txt = (resp.choices[0].message.content or "").strip()
-    plan = json.loads(txt)
+    content = (r.choices[0].message.content or "").strip()
+    return json.loads(content)
 
-    if not isinstance(plan, dict):
-        raise ValueError("Planner output must be a JSON object.")
-    if "thought" not in plan or "action" not in plan:
-        raise ValueError("Planner output must contain 'thought' and 'action'.")
-    action = plan["action"]
-    if not isinstance(action, dict) or "name" not in action or "args" not in action:
-        raise ValueError("Planner 'action' must have 'name' and 'args'.")
-    name = str(action["name"]).strip().lower()
-    if name not in VALID:
+# ---------- Arg resolution (numbers & carry variable 'r') ----------
+def _to_float(x: Any) -> float:
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        xs = x.strip()
+        # Allow leading +/-, decimals
+        if re.fullmatch(r"[+-]?\d+(\.\d+)?", xs):
+            return float(xs)
+    raise ValueError(f"Non-numeric literal: {x!r}")
+
+def resolve_arg(val: Any, env: Dict[str, float]) -> float:
+    """
+    Allowed inputs:
+      - numeric literals (int/float/str-of-number)
+      - symbol 'r' => last result (carry)
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        v = val.strip()
+        if v.lower() == "r":
+            if "r" not in env:
+                raise ValueError("Carry variable 'r' not set yet")
+            return float(env["r"])
+        # numeric string?
+        return _to_float(v)
+    # Reject any complex structure (lists, dicts, etc.)
+    return _to_float(val)
+
+def normalize_args(name: str, raw_args: Dict[str, Any], env: Dict[str, float]) -> Dict[str, float]:
+    n = name.lower()
+    if n in {"add", "subtract", "multiply", "divide"}:
+        a = resolve_arg(raw_args.get("a"), env)
+        b = resolve_arg(raw_args.get("b"), env)
+        return {"a": a, "b": b}
+    elif n == "square":
+        x = resolve_arg(raw_args.get("x"), env)
+        return {"x": x}
+    elif n == "power":
+        x = resolve_arg(raw_args.get("x"), env)
+        y = resolve_arg(raw_args.get("y"), env)
+        return {"x": x, "y": y}
+    elif n == "sqrt":
+        x = resolve_arg(raw_args.get("x"), env)
+        return {"x": x}
+    elif n == "round":                                           # ← NEW
+        x = resolve_arg(raw_args.get("x"), env)                  # ← NEW
+        nd = raw_args.get("ndigits", 0)                          # ← NEW
+        nd = int(resolve_arg(nd, env) if isinstance(nd, str) else nd)
+        return {"x": x, "ndigits": nd}                           # ← NEW
+    elif n == "stop":
+        return {}
+    else:
         raise ValueError(f"Unsupported action name: {name}")
-    if not isinstance(action["args"], dict):
-        raise ValueError("Planner 'args' must be an object.")
-    return plan
 
-# ---------- Final answer extraction ----------
-def extract_final_answer(text: str) -> str:
-    m = FINAL_RE.search(text)
-    if not m:
-        raise ValueError(f"Final answer missing or not wrapped in <{FINAL_TAG}> tags.")
-    return m.group(1).strip()
+# ---------- Finalization with one retry ----------
+def _finalize_answer(history: List[Dict[str, str]], model: str, final_tag: str = FINAL_TAG) -> str:
+    """
+    Ask for the final answer; if tag missing, retry once with a stricter instruction.
+    Deterministic: temperature=0, fixed wording.
+    """
+    client = _client()
+    # Attempt 1
+    prompt = (
+        f"Return ONLY the final numeric answer wrapped exactly as "
+        f"<{final_tag}>NUMBER</{final_tag}>. No prose or extra text."
+    )
+    r = client.chat.completions.create(
+        model=model, temperature=0, messages=history + [{"role": "user", "content": prompt}]
+    )
+    txt = (r.choices[0].message.content or "").strip()
+    try:
+        return extract_final_answer(txt)
+    except ValueError:
+        # Attempt 2 (one retry)
+        retry = (
+            f"Your previous reply did not follow the required format.\n"
+            f"Return ONLY the final numeric answer wrapped exactly as:\n"
+            f"<{final_tag}>NUMBER</{final_tag}>\n"
+            f"No prose, no markdown, no extra text."
+        )
+        r2 = client.chat.completions.create(
+            model=model, temperature=0, messages=history + [{"role": "user", "content": retry}]
+        )
+        txt2 = (r2.choices[0].message.content or "").strip()
+        return extract_final_answer(txt2)
 
-# ---------- Public solve ----------
+# ---------- Solve loop ----------
 def solve(question: str, model: str = "gpt-4o-mini", max_steps: int = 8) -> Tuple[List[AFMStep], str]:
-    client = _get_client()
+    """
+    Runs the deterministic planner-executor loop and returns:
+      - steps: list[AFMStep]
+      - final: string with <final>NUMBER</final>
+    """
     system_prompt = _render_system_prompt()
-
-    steps: List[AFMStep] = []
-    env = extract_env_vars(question)
     history: List[Dict[str, str]] = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Question: {question}"}
+        {"role": "user", "content": f"Question: {question}"},
     ]
-    last_value: Optional[float] = None
+    steps: List[AFMStep] = []
+    env: Dict[str, float] = {}  # variable environment; 'r' holds last numeric result
 
     for _ in range(max_steps):
-        plan = llm_plan_step(history, model=model)
+        plan = _plan_step(history, model=model)
         thought = plan["thought"]
         action = plan["action"]
-        name = str(action["name"]).strip().lower()
-        raw_args = action["args"]
-
-        require_args_for_action(name, raw_args)
+        name: str = str(action["name"]).strip().lower()
+        if name not in VALID:
+            raise ValueError(f"Unsupported action: {name}")
 
         if name == "stop":
-            steps.append(AFMStep(function="stop", thought=thought,
-                                 tool_call={"name": "stop", "args": {}}, tool_result=None))
+            steps.append(
+                AFMStep(function="stop", thought=thought, tool_call={"name": "stop", "args": {}}, tool_result=None)
+            )
             break
 
-        # resolve args strictly (aware of r)
-        args: Dict[str, float] = {k: resolve_arg(v, env, last_value) for k, v in raw_args.items()}
+        # Normalize args & run tool deterministically
+        raw_args = action.get("args", {})
+        args = normalize_args(name, raw_args, env)
         call, result = run_tool(name, **args)
-        steps.append(AFMStep(function=name, thought=thought, tool_call=call, tool_result=result))
 
-        # feedback
-        history.append({"role": "assistant", "content": json.dumps(plan)})
-        history.append({"role": "system", "content": f"Observation: {result}."})
-        last_value = result
+        # AFM step log
+        steps.append(
+            AFMStep(function=name, thought=thought, tool_call=call, tool_result=result)
+        )
 
-    # ask for final numeric answer inside tags
-    history.append({"role": "user", "content": f"Given the observations, return only the final numeric answer as <{FINAL_TAG}>N</{FINAL_TAG}>."})
-    r = client.chat.completions.create(model=model, messages=history, temperature=0)
-    final_raw = (r.choices[0].message.content or "").strip()
-    final_answer = extract_final_answer(final_raw)
+        # Update history with the plan JSON and observation (truncate observation for safety)
+        history.append({"role": "assistant", "content": json.dumps(plan, ensure_ascii=False)})
+        obs_text = json.dumps(result, ensure_ascii=False)
+        history.append({"role": "system", "content": f"Observation: {obs_text[:2000]}"} )
+
+        # Update carry
+        if isinstance(result, (int, float)):
+            env["r"] = float(result)
+
+    # Finalization (answer only, strictly tagged)
+    final_answer = _finalize_answer(history, model=model, final_tag=FINAL_TAG)
     return steps, final_answer

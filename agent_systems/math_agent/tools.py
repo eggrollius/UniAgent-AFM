@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Dict, Any, Tuple
+from decimal import Decimal, ROUND_HALF_UP
 
 @dataclass
 class ToolCall:
@@ -44,10 +45,23 @@ def sqrt(x: float) -> float:
         raise ValueError("sqrt: domain error (x < 0)")
     return x ** 0.5
 
+def _round_half_up(x: float, ndigits: int = 0) -> float:
+    q = Decimal(str(x))
+    if ndigits >= 0:
+        exp = Decimal("1").scaleb(-ndigits)  # 10^(-ndigits)
+    else:
+        # e.g., ndigits = -1 → round to tens
+        exp = Decimal("1").scaleb(-ndigits)  # still works with quantize
+    return float(q.quantize(exp, rounding=ROUND_HALF_UP))
+
+def round(x: float, ndigits: int = 0) -> float:  # noqa: A001 (intentional name)
+    """Deterministic grade-school rounding: HALF_UP."""
+    return _round_half_up(float(x), int(ndigits))
+
 class ToolError(Exception):
     pass
 
-def run_tool(name: str, **kwargs) -> Tuple[Dict[str, Any], float | None]:
+def run_tool(name: str, **kwargs):
     call = {"name": name, "args": kwargs}
     if name == "add":
         res = add(**kwargs)
@@ -63,8 +77,11 @@ def run_tool(name: str, **kwargs) -> Tuple[Dict[str, Any], float | None]:
         res = power(**kwargs)
     elif name == "sqrt":
         res = sqrt(**kwargs)
+    elif name == "round":                       # ← NEW
+        res = round(**kwargs)                   # ← NEW
     elif name == "stop":
         res = None
     else:
         raise ToolError(f"Unknown tool: {name}")
     return call, res
+
