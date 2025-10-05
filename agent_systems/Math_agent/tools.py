@@ -1,60 +1,70 @@
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, List
-import time, math
+from typing import Dict, Any, Tuple
 
 @dataclass
-class ToolResult:
+class ToolCall:
     name: str
     args: Dict[str, Any]
-    stdout: str = ""
-    stderr: str = ""
-    returncode: int = 0
-    artifacts: Optional[List[str]] = None
-    latency_ms: Optional[int] = None
 
-class AddTool:
-    def __init__(self): self.name = "add"
-    def __call__(self, a: float, b: float) -> ToolResult:
-        t0 = time.time()
-        try:
-            val = float(a) + float(b)
-            return ToolResult(self.name, {"a": a, "b": b}, stdout=str(val),
-                              latency_ms=int((time.time()-t0)*1000))
-        except Exception as e:
-            return ToolResult(self.name, {"a": a, "b": b}, stderr=str(e), returncode=2)
+def add(a: float, b: float) -> float:
+    return float(a) + float(b)
 
-class MultiplyTool:
-    def __init__(self): self.name = "multiply"
-    def __call__(self, a: float, b: float) -> ToolResult:
-        t0 = time.time()
-        try:
-            val = float(a) * float(b)
-            return ToolResult(self.name, {"a": a, "b": b}, stdout=str(val),
-                              latency_ms=int((time.time()-t0)*1000))
-        except Exception as e:
-            return ToolResult(self.name, {"a": a, "b": b}, stderr=str(e), returncode=2)
+def subtract(a: float, b: float) -> float:
+    """Subtract b from a."""
+    return float(a) - float(b)
 
-class SquareTool:
-    def __init__(self): self.name = "square"
-    def __call__(self, x: float) -> ToolResult:
-        t0 = time.time()
-        try:
-            val = float(x) * float(x)
-            return ToolResult(self.name, {"x": x}, stdout=str(val),
-                              latency_ms=int((time.time()-t0)*1000))
-        except Exception as e:
-            return ToolResult(self.name, {"x": x}, stderr=str(e), returncode=2)
+def multiply(a: float, b: float) -> float:
+    return float(a) * float(b)
 
-def eval_expression(expr: str) -> ToolResult:
-    """Safe-ish eval for +,*,**,(),digits,spaces,^ (as **)."""
-    import re, time
-    t0 = time.time()
-    if not re.fullmatch(r"[0-9\.\s\+\*\(\)\^xX\-]+", expr):
-        return ToolResult("eval_expression", {"expr": expr}, stderr="unsupported chars", returncode=2)
-    safe = expr.replace("^", "**")
-    try:
-        val = eval(safe, {"__builtins__": {}}, {"math": math})
-        return ToolResult("eval_expression", {"expr": expr}, stdout=str(val),
-                          latency_ms=int((time.time()-t0)*1000))
-    except Exception as e:
-        return ToolResult("eval_expression", {"expr": expr}, stderr=str(e), returncode=2)
+def divide(a: float, b: float) -> float:
+    """Divide a by b (strict: b != 0)."""
+    a = float(a)
+    b = float(b)
+    if b == 0.0:
+        raise ValueError("divide: division by zero")
+    return a / b
+
+def square(x: float) -> float:
+    return float(x) * float(x)
+
+def power(a: float, b: float) -> float:
+    """a ** b with strict domain rules:
+       - if a < 0, b must be an integer (to avoid complex results).
+    """
+    a = float(a); b = float(b)
+    # integer check for b
+    if a < 0 and abs(b - round(b)) > 1e-12:
+        raise ValueError("power: negative base requires integer exponent")
+    return a ** b
+
+def sqrt(x: float) -> float:
+    """sqrt(x) with x >= 0."""
+    x = float(x)
+    if x < 0:
+        raise ValueError("sqrt: domain error (x < 0)")
+    return x ** 0.5
+
+class ToolError(Exception):
+    pass
+
+def run_tool(name: str, **kwargs) -> Tuple[Dict[str, Any], float | None]:
+    call = {"name": name, "args": kwargs}
+    if name == "add":
+        res = add(**kwargs)
+    elif name == "subtract":
+        res = subtract(**kwargs)
+    elif name == "multiply":
+        res = multiply(**kwargs)
+    elif name == "divide":
+        res = divide(**kwargs)
+    elif name == "square":
+        res = square(**kwargs)
+    elif name == "power":
+        res = power(**kwargs)
+    elif name == "sqrt":
+        res = sqrt(**kwargs)
+    elif name == "stop":
+        res = None
+    else:
+        raise ToolError(f"Unknown tool: {name}")
+    return call, res
