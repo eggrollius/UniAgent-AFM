@@ -2,7 +2,7 @@
 import os, json, argparse, uuid
 from typing import Dict, Any
 from .agent import solve
-from .afm_schema import AFMTrajectory
+from ..afm_schema import AFMTrajectory
 
 def read_jsonl(path: str):
     with open(path, "r", encoding="utf-8") as f:
