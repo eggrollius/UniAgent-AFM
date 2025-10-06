@@ -18,6 +18,7 @@ trajectories/
 results/
 data/
 __pycache__/
+samples/legal_corpus_casehold/
 
 # SFT data (ignore everything except the helper script)
 sft/data/**
