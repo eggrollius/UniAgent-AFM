@@ -66,7 +66,7 @@ def main():
         sys.exit(1)
 
     all_rows = []
-    for traj_file in root_path.rglob("*.traj"):
+    for traj_file in root_path.rglob("*.json"):
         try:
             rows = parse_trajectory(traj_file)
             all_rows.extend(rows)

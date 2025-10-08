@@ -1,0 +1,79 @@
+{
+  "run_id": "9749855c-cd99-414f-b330-ccda0d461e52",
+  "domain": "mhqa",
+  "task_id": "What is the capital of France?",
+  "env": "local",
+  "model_name": "none (stub)",
+  "start_time": "2025-10-02T21:49:31Z",
+  "end_time": "2025-10-02T21:49:31Z",
+  "success": true,
+  "stop_reason": "solved",
+  "steps": [
+    {
+      "role": "assistant",
+      "content": "PLAN: retrieve evidence via sparse and dense, merge, then read to answer: 'What is the capital of France?'.",
+      "phase": "PLAN",
+      "turn_id": 1
+    },
+    {
+      "role": "tool",
+      "content": "",
+      "turn_id": 1
+    },
+    {
+      "role": "assistant",
+      "content": "Retrieve with BM25.\n\n```bash\nbm25_search(q='What is the capital of France?', k=5)\n```",
+      "phase": "RETRIEVE_SPARSE",
+      "turn_id": 2
+    },
+    {
+      "role": "tool",
+      "content": "<returncode>0</returncode><output>{\"docs\": [{\"title\": \"France\", \"text\": \"France is a country in Europe. The capital of France is Paris.\"}, {\"title\": \"Paris\", \"text\": \"Paris is the capital and largest city of France.\"}, {\"title\": \"Capital Cities\", \"text\": \"Capital cities are the main cities of countries. Paris is the capital of France.\"}, {\"title\": \"Geography\", \"text\": \"France is located in Western Europe. Its capital is Paris.\"}, {\"title\": \"Europe\", \"text\": \"Europe is a continent. France is located in Western Europe.\"}]}</output>",
+      "turn_id": 2
+    },
+    {
+      "role": "assistant",
+      "content": "Retrieve with dense encoder.\n\n```bash\ndense_search(q='What is the capital of France?', k=5)\n```",
+      "phase": "RETRIEVE_DENSE",
+      "turn_id": 3
+    },
+    {
+      "role": "tool",
+      "content": "<returncode>0</returncode><output>{\"docs\": [{\"title\": \"France\", \"text\": \"France is a country in Europe. The capital of France is Paris.\"}, {\"title\": \"Paris\", \"text\": \"Paris is the capital and largest city of France.\"}, {\"title\": \"Capital Cities\", \"text\": \"Capital cities are the main cities of countries. Paris is the capital of France.\"}, {\"title\": \"Geography\", \"text\": \"France is located in Western Europe. Its capital is Paris.\"}, {\"title\": \"Europe\", \"text\": \"Europe is a continent. France is located in Western Europe.\"}]}</output>",
+      "turn_id": 3
+    },
+    {
+      "role": "assistant",
+      "content": "Merge and dedupe.\n\n```bash\nhybrid_merge(bm25_json, dense_json)\n```",
+      "phase": "HYBRID",
+      "turn_id": 4
+    },
+    {
+      "role": "tool",
+      "content": "<returncode>0</returncode><output>{\"docs\": [{\"title\": \"France\", \"text\": \"France is a country in Europe. The capital of France is Paris.\"}, {\"title\": \"Paris\", \"text\": \"Paris is the capital and largest city of France.\"}, {\"title\": \"Capital Cities\", \"text\": \"Capital cities are the main cities of countries. Paris is the capital of France.\"}, {\"title\": \"Geography\", \"text\": \"France is located in Western Europe. Its capital is Paris.\"}, {\"title\": \"Europe\", \"text\": \"Europe is a continent. France is located in Western Europe.\"}]}</output>",
+      "turn_id": 4
+    },
+    {
+      "role": "assistant",
+      "content": "Pick an answer span from merged context.\n\n```bash\nheuristic_reader(question, merged_json)\n```",
+      "phase": "READ",
+      "turn_id": 5
+    },
+    {
+      "role": "tool",
+      "content": "<returncode>0</returncode><output>{\"answer\": \"France is a country in Europe.\"}</output>",
+      "turn_id": 5
+    },
+    {
+      "role": "assistant",
+      "content": "Return the answer.\n\n```bash\necho SUBMIT_FINAL\n```",
+      "phase": "FINALIZE",
+      "turn_id": 6
+    },
+    {
+      "role": "tool",
+      "content": "<returncode>0</returncode><output>{\"answer\": \"France is a country in Europe.\"}</output>",
+      "turn_id": 6
+    }
+  ]
+}

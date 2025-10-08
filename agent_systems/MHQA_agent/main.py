@@ -1,6 +1,6 @@
 import argparse, json, os, uuid, datetime
 from typing import Dict, Any, Optional
-from .tools import BM25SearchTool, DenseSearchTool, HybridMergeTool, HeuristicReader, ToolResult
+from .tools import BM25SearchTool, DenseSearchTool, HybridMergeTool, HeuristicReader, LLMReader, ToolResult
 
 def now_iso():
     return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
@@ -20,13 +20,13 @@ def new_step(turn_id: int, phase: str, thought: str, action_block: Optional[str]
         {"role": "tool", "content": obs_xml, "turn_id": turn_id},
     ]
 
-def run_episode(question: str, topk_sparse: int, topk_dense: int, out_path: str):
+def run_episode(question: str, topk_sparse: int, topk_dense: int, out_path: str, use_llm: bool = True):
     run = {
         "run_id": str(uuid.uuid4()),
         "domain": "mhqa",
         "task_id": question[:128],
         "env": "local",
-        "model_name": "none (stub)",
+        "model_name": "gpt-4o-mini" if use_llm else "heuristic",
         "start_time": now_iso(),
         "end_time": None,
         "success": False,
@@ -37,7 +37,7 @@ def run_episode(question: str, topk_sparse: int, topk_dense: int, out_path: str)
     bm25 = BM25SearchTool()
     dense = DenseSearchTool()
     merge = HybridMergeTool()
-    reader = HeuristicReader()
+    reader = LLMReader() if use_llm else HeuristicReader()
 
     turn = 1
     run["steps"] += new_step(turn, "PLAN",
@@ -66,9 +66,10 @@ def run_episode(question: str, topk_sparse: int, topk_dense: int, out_path: str)
 
     # Reader
     turn += 1
+    reader_name = "llm_reader" if use_llm else "heuristic_reader"
     r_read: ToolResult = reader(question, r_hybrid.stdout or "{}")
-    run["steps"] += new_step(turn, "READ", "Pick an answer span from merged context.",
-                             "heuristic_reader(question, merged_json)",
+    run["steps"] += new_step(turn, "READ", "Use LLM to reason about question and context." if use_llm else "Pick an answer span from merged context.",
+                             f"{reader_name}(question, merged_json)",
                              {"returncode": r_read.returncode, "stdout": r_read.stdout})
 
     # Finalize
@@ -80,7 +81,11 @@ def run_episode(question: str, topk_sparse: int, topk_dense: int, out_path: str)
     run["success"] = (r_read.returncode == 0)
     run["stop_reason"] = "solved" if run["success"] else "error"
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # Create directory if needed (only if out_path has a directory component)
+    dir_path = os.path.dirname(out_path)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+    
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(run, f, ensure_ascii=False, indent=2)
     print(f"[ok] saved trajectory to {out_path}")
@@ -90,7 +95,18 @@ if __name__ == "__main__":
     ap.add_argument("--question", required=True, help="Multi-hop question text")
     ap.add_argument("--topk_sparse", type=int, default=5)
     ap.add_argument("--topk_dense", type=int, default=5)
+    ap.add_argument("--use_llm", action="store_true", default=True, help="Use LLM reasoning (default: True)")
+    ap.add_argument("--no_llm", action="store_true", help="Disable LLM reasoning, use heuristic reader")
     ap.add_argument("-o", "--out", default=None)
     args = ap.parse_args()
+    
+    # Determine if we should use LLM
+    use_llm = args.use_llm and not args.no_llm
+    
     out_path = args.out or f"data/raw/{uuid.uuid4()}.traj.json"
-    run_episode(args.question, args.topk_sparse, args.topk_dense, out_path)
+    
+    # Create data directory if using default path
+    if not args.out:
+        os.makedirs("data/raw", exist_ok=True)
+    
+    run_episode(args.question, args.topk_sparse, args.topk_dense, out_path, use_llm)

@@ -22,3 +22,12 @@ __pycache__/
 # SFT data (ignore everything except the helper script)
 sft/data/**
 !sft/data/download_trajectories.sh
+
+examples/quick_retrieval_service.py
+
+# Test files and logs
+*.log
+test_output*.json
+demo_output*.json
+__pycache__/
+*.pyc
