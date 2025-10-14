@@ -1,12 +1,38 @@
 import json
 import sys
 from pathlib import Path
+import shlex
+
+def action_to_tool_call(action: str) -> dict:
+    """
+    Convert an action string like:
+        "str_replace_editor view /testbed"
+    back into a JSON tool call format.
+    Assumes the action string is space-separated
+    with the tool name first, then arguments.
+    """
+    parts = shlex.split(action)  # handles quoted args safely
+    if not parts:
+        raise ValueError("Empty action string")
+
+    tool_name, *args = parts
+
+    arguments = {f"arg{i}": arg for i, arg in enumerate(args)}
+
+    return [
+            {
+                "function": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            }
+        ]
 
 def parse_trajectory(file_path: str):
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    TARGET_TOOL = "cd"
+    TARGET_TOOL = "str_replace_editor"
 
     dataset_rows = []  
     for step in data["trajectory"]:
@@ -21,9 +47,10 @@ def parse_trajectory(file_path: str):
         # if step has tool call, and it matches
         if action != "" and action.startswith(TARGET_TOOL):
             prompt = normalize_query(query)
+            tool = action_to_tool_call(action)
             completion = [{
                 "thought": thought,
-                "action": action,
+                "tool_calls": tool,
                 # we dont include observation since that would cause tool reuslt hallucination.
                 # but do we include response?
                 # likley not.
@@ -33,7 +60,6 @@ def parse_trajectory(file_path: str):
             new_row = {
                 "prompt": prompt,
                 "completion": completion,
-                "label": "true"
             }
 
             dataset_rows.append(normalize_query(new_row))

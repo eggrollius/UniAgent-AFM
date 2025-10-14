@@ -1,10 +1,11 @@
 import argparse
 import os
 import random
+import json
 import numpy as np
 import torch
 
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from trl import SFTTrainer, SFTConfig
 
@@ -38,11 +39,8 @@ torch.manual_seed(args.seed)
 # Load tokenizer
 # -----------------------
 tok = AutoTokenizer.from_pretrained(args.model_id, use_fast=True, trust_remote_code=True)
-
-#if tok.pad_token is None:
-    #tok.pad_token = tok.eos_token
-
-#eos_str = tok.eos_token if isinstance(tok.eos_token, str) else "<|im_end|>"
+if tok.pad_token is None:
+    tok.pad_token = tok.eos_token
 
 # -----------------------
 # Load model on CPU
@@ -56,12 +54,68 @@ model = AutoModelForCausalLM.from_pretrained(
 
 # -----------------------
 # Load dataset from JSONL
+#   Your rows look like:
+#   {"prompt":[...], "completion":[...]}
+#   We adapt them to a single "text" field containing:
+#     <user>...</user>\n<assistant_call>{"name":..., "arguments":{...}}</assistant_call>
+#   (We only train the call here; final-answer training can be added similarly.)
 # -----------------------
 if not os.path.exists(args.train_jsonl):
     raise FileNotFoundError(f"Training file not found: {args.train_jsonl}")
 
-ds = load_dataset("json", data_files={"train": args.train_jsonl})["train"]
-ds = ds.shuffle(seed=args.seed).select(range(min(64, len(ds))))
+raw = load_dataset("json", data_files={"train": args.train_jsonl})["train"]
+
+def row_to_samples(row):
+    prompt = row.get("prompt", [])
+    completion = row.get("completion", [])
+
+    # last user message content from prompt
+    user_msg = next((m.get("content") for m in reversed(prompt) if m.get("role") == "user"), None)
+
+    # try to pull a tool call (prefer completion.tool_calls, else assistant.tool_calls in prompt)
+    assistant_call = None
+
+    # 1) from completion
+    if completion and isinstance(completion, list):
+        tc_list = completion[0].get("tool_calls") or []
+        if tc_list:
+            fn = tc_list[0]["function"]["name"]
+            args_ = tc_list[0]["function"]["arguments"]
+            try:
+                args_obj = json.loads(args_) if isinstance(args_, str) else args_
+            except Exception:
+                args_obj = args_
+            assistant_call = json.dumps({"name": fn, "arguments": args_obj})
+
+    # 2) fallback: from prompt assistant message
+    if assistant_call is None:
+        for m in prompt:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                fn = m["tool_calls"][0]["function"]["name"]
+                args_ = m["tool_calls"][0]["function"]["arguments"]
+                try:
+                    args_obj = json.loads(args_) if isinstance(args_, str) else args_
+                except Exception:
+                    args_obj = args_
+                assistant_call = json.dumps({"name": fn, "arguments": args_obj})
+                break
+
+    samples = []
+    if user_msg and assistant_call:
+        samples.append({
+            "text": f"<user>{user_msg}</user>\n<assistant_call>{assistant_call}</assistant_call>"
+        })
+    return samples
+
+# flat = []
+# for r in raw:
+#     flat.extend(row_to_samples(r))
+
+# if not flat:
+#     raise ValueError("No training samples were produced from the dataset. Check your schema mapping.")
+
+ds = Dataset.from_list(raw)
+ds = ds.shuffle(seed=args.seed).select(range(min(200, len(ds))))
 
 # -----------------------
 # Configure SFT
@@ -75,20 +129,17 @@ cfg = SFTConfig(
     learning_rate=2e-5,
     logging_steps=10,
     save_strategy="no",
-    report_to=None,
+    report_to=["tensorboard"],
 
-    dataset_text_field="text",  # ignored for prompt-completion
+    dataset_text_field="text",
     max_length=args.max_length,
     packing=args.packing,
     completion_only_loss=False,
 
-    #eos_token=eos_str,
-    pad_token=tok.pad_token,
-    no_cuda=True,
-    use_cpu=True,
+    # for cpu args
     bf16=False,
     fp16=False,
-    tf32=None,
+    tf32=False,
 )
 
 # -----------------------
@@ -96,9 +147,9 @@ cfg = SFTConfig(
 # -----------------------
 trainer = SFTTrainer(
     model=model,
+    processing_class=tok,
     args=cfg,
     train_dataset=ds,
-    processing_class=tok,
 )
 
 trainer.train()
@@ -109,7 +160,8 @@ trainer.save_model(args.out_dir)
 # -----------------------
 pipe = pipeline("text-generation", model=args.out_dir, tokenizer=tok, device_map=None)
 
-prompt_struct = [{"role": "user", "content": "Write a Python function `def add(a,b):` returning the sum. Only a single Python code block."}]
-out = pipe(prompt_struct)
+query = "I've uploaded a repo. Run a bash tool to list /testbed."
+prompt_str = f"<user>{query}</user>\n<assistant_call>"
+out = pipe(prompt_str, max_new_tokens=120, do_sample=False)[0]["generated_text"]
 print("\n=== SAMPLE GENERATION ===")
-print(out[0]["generated_text"])
+print(out)
